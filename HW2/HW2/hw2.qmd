@@ -1,0 +1,168 @@
+---
+title: PSTAT 222C Homework 1
+format:
+    pdf:
+        documentclass: article
+        margin-left: 20mm
+        margin-right: 20mm
+header-includes:
+    - \usepackage{amsmath}
+    - \usepackage{amssymb}
+    - \usepackage{enumitem}
+    - \usepackage{amsthm}
+    - \usepackage{mathrsfs}
+    - \usepackage{mathtools}
+
+engine: knitr
+jupyter: python3
+code-fold: true
+---
+
+```{=tex}
+\newcommand{\bbr}{\mathbb{R}}
+\newcommand{\geps}{\epsilon}
+\newcommand{\iid}{\overset{\text{iid}}\sim}
+\newcommand{\ncal}{\mathcal{N}}
+\newcommand{\gs}{\sigma}
+\newcommand{\Gd}{\Delta}
+\newcommand{\gf}{\phi}
+\newcommand{\gl}{\lambda}
+\newcommand{\ga}{\alpha}
+\newcommand{\gt}{\tau}
+\newcommand{\gy}{\gamma}
+\newcommand{\gb}{\beta}
+\newcommand{\T}{\intercal}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\var}{\textrm{Var}}
+\renewcommand{\Pr}{\mathbb{P}}
+\renewcommand{\E}{\mathbb{E}}
+```
+# Problem 1
+
+We consider a corridor option for asset $X_t$ with payoff of \$1 if $X_t \in [L_1,L_2]$ and \$0 otherwise. $X_t$ is governed by the SDE 
+\begin{align}
+  dX_t = r X_t dt + \sigma^2 X_t^\gamma dW_t 
+\end{align} 
+where $\gamma$ is the elasticity of the variance. Applying Ito's Lemma to the price of the option, $V(t,x)$, we get:
+
+```{=tex}
+\begin{align}
+  dV &= \frac{\partial V}{\partial t} dt + \frac{\partial V}{\partial x} dX_t + \frac{1}{2} \frac{\partial^2 V}{\partial x^2} dX_t^2 \\ 
+  &= \frac{\partial V}{\partial t} dt + \frac{\partial V}{\partial x}(r X_t dt + \sigma^2 X_t^\gamma dW_t) + \frac{1}{2} \frac{\partial^2 V}{\partial x^2}  (r X_t dt + \sigma^2 X_t^\gamma dW_t)^2 \\
+  &= \left( \frac{\partial V}{\partial t} + rX_t \frac{\partial V}{\partial x} + \frac{\sigma^2 X_t^{2\gamma}}{2} \frac{\partial^2 V}{\partial x^2}   \right) dt + \sigma X_t^\gamma \frac{\partial V}{\partial x} dW_t
+\end{align}
+```
+Under the assumption that this is the risk-neutral measure, we must have that the expected price of the option is equal to the present value of the risk free rate of the price of the option; that is: 
+
+```{=tex}
+\begin{align}
+  \mathbb{E}[dV]= rV dt = \left( \frac{\partial V}{\partial t} + rX_t \frac{\partial V}{\partial x} + \frac{\sigma^2 X_t^{2\gamma}}{2} \frac{\partial^2 V}{\partial x^2}   \right)dt
+\end{align}
+```
+
+It therefore follows that the PDE for the CEV model can be written as: 
+\begin{align} \label{pde_CEV}
+  \frac{\partial V}{\partial t} + rX_t \frac{\partial V}{\partial x} + \frac{\sigma^2 X_t^{2\gamma}}{2} \frac{\partial^2 V}{\partial x^2}  -rV = 0 
+\end{align} 
+Let the value of the discretization of the PDE at time $m\Delta t$ and $n \Delta x$ be $V(m \Delta t, n \Delta x) = V_n^m$. The explicit finite difference scheme is given by:
+
+```{=tex}
+\begin{align}
+  \frac{V_n^m - V_n^{m-1}}{\Delta t} + r(n \Delta x) \frac{V^m_{n+1} - V^m_{n-1}}{2 \Delta x} + \frac{\sigma^2 (n \Delta x)^{2 \gamma}}{2} \frac{V_{n+1}^m -2 V_n^m + V_{n-1}^m}{(\Delta x)^2}  - r V_n^m = 0
+\end{align}
+```
+We can derive the implicit Finite Difference similarly
+
+```{=tex}
+\begin{align}
+\frac{V_n^m -V_n^{m-1}}{\Delta t} + r(n \Gd x)\frac{V_{n+1}^{m-1}-V_{n-1}^{m-1}}{2 \Gd x} + \frac{\gs^2(n \Gd x)^{2 \gamma}}{2} \frac{V_{n+1}^{m-1}- 2 V_{n}^{m-1}+ V_{n-1}^{m-1}}{(\Gd x)^2} - rV_n^{m-1} = 0
+\end{align}
+```
+
+Solving for $V_n^{m}$, we find:
+
+```{=tex}
+\begin{align}
+  V_n^{m} &= V_n^{m-1} + \Gd t \left( r(n \Gd x)\frac{V_{n+1}^{m-1}-V_{n-1}^{m-1}}{2 \Gd x} + \frac{\gs^2(n \Gd x)^{2 \gamma}}{2} \frac{V_{n+1}^{m-1}- 2 V_{n}^{m-1}+ V_{n-1}^{m-1}}{(\Gd x)^2} - rV_n^{m-1} \right)\\ 
+  &=\underbrace{\frac{\Gd t}{2}\left( -r n  + \frac{\gs^2 (n \Gd x)^{2 \gamma}}{(\Gd x)^2} \right)}_{\tilde{a}_n} V_{n-1}^{m-1} +  \underbrace{\left(1 -r\Gd t + \frac{\gs^2 (n \Gd x)^{2 \gamma}\Gd t}{(\Gd x)^2}  \right)}_{\tilde{b}_n}V_n^{m-1} + \underbrace{\frac{\Gd t}{2}\left( r n+ \frac{\gs^2 (n \Gd x)^{2 \gamma}}{(\Gd x)^2} \right)}_{\tilde{c}_n}V_{n+1}^{m-1} \\ 
+  &= \tilde{a}_n V_{n-1}^{m-1} + \tilde{b}_nV_{n}^{m-1} + \tilde{c}_nV_{n+1}^{m-1}
+\end{align}
+```
+
+Imposing the exogenous boundary conditions on two assets $N_-$ and $N_+$ such that $V_{N_-}^M = V_{N_+}^M = 0$ and $V_{N_-+1}^M = V_{N_+-1}^M = 1$ we find that we can represent the discretized PDE as:
+
+```{=tex}
+\begin{align}
+A V^{m-1} &=  B V^m  + g\\
+V^{m-1} &= A^{-1} \left( B V^m + g \right)
+\end{align}
+```
+where $B = I$, the identity matrix.
+
+```{r}
+implicitCorridor<- function(dt,dx,gam){
+  r <- 0.05
+  T <- 1/2
+  sigma <- 0.4
+  L1 <- 15
+  L2 <- 25
+  X_min <- 15
+  X_max <- 25
+  
+  time_steps <- as.integer(T/dt)
+  space_steps <- as.integer((X_max-X_min)/dx)+1
+  
+  space_grid <- X_min + dx*(0:(space_steps-1))
+  
+  V <- 1 - ((space_grid>L2 | space_grid<L1)*1)
+  
+  space_grid <- X_min/dx + 0:(space_steps-1)
+  
+  a_i <- dt/2*(sigma^2*(space_grid*dx)^(2*gam)/(dx^2) - r*space_grid)
+  b_i <- -dt*(sigma^2*(space_grid*dx)^(2*gam)/(dx^2) + r)
+  c_i <- dt/2*(sigma^2*(space_grid*dx)^(2*gam)/(dx^2) + r*space_grid)
+
+  Amatrix <- diag(1-b_i,space_steps)
+  Amatrix[(row(Amatrix) - col(Amatrix)) == 1] <- -1*a_i[2:(space_steps)]
+  Amatrix[(row(Amatrix) - col(Amatrix)) == -1] <- -1*c_i[1:(space_steps-1)]
+  
+  Bmatrix <- diag(1,space_steps)
+  for (k in 1:time_steps){
+    V<-solve(Amatrix, Bmatrix %*% V)
+  }
+  return(V)
+}
+```
+```{r, fid.width=10,fig.height=6,fig.fullwidth=TRUE}
+gam<-0.8
+dt <- 0.1
+dx <- 0.2
+val<-implicitCorridor(dt,dx,gam)
+options(scipen=999)
+plot(x = seq(15,25,dx), y= val,type='l',main="Implicit Method for Corridor Option",
+ylab="Option Price",xlab = "Underlying Price" )
+```
+
+
+## Crank-Nicholson Solver
+```{r}
+cnCorridor<-function(dt,dx,gam){
+  r <- 0.05
+  T <- 1/2
+  sigma <- 0.4
+  L1 <- 15
+  L2 <- 25
+  X_min <- 15
+  X_max <- 25
+
+  time_steps <- as.integer(T/dt)
+  space_steps <- as.integer((X_max-X_min)/dx)+1
+  
+  space_grid <- X_min + dx*(0:(space_steps-1))
+  
+  V <- 1 - ((space_grid>L2 | space_grid<L1)*1)
+  
+  space_grid <- X_min/dx + 0:(space_steps-1)
+
+}
+```

@@ -1,0 +1,685 @@
+---
+title: PSTAT 222C Homework 3
+author: Alex Bernstein
+format:
+    pdf:
+        documentclass: article
+        margin-left: 20mm
+        margin-right: 20mm
+header-includes:
+    - \usepackage{amsmath}
+    - \usepackage{amssymb}
+    - \usepackage{enumitem}
+    - \usepackage{amsthm}
+    - \usepackage{mathrsfs}
+    - \usepackage{mathtools}
+
+jupyter: python3
+code-fold: true
+---
+
+```{=tex}
+\newcommand{\bbr}{\mathbb{R}}
+\newcommand{\geps}{\epsilon}
+\newcommand{\iid}{\overset{\text{iid}}\sim}
+\newcommand{\ncal}{\mathcal{N}}
+\newcommand{\gs}{\sigma}
+\newcommand{\Gd}{\Delta}
+\newcommand{\gf}{\phi}
+\newcommand{\gl}{\lambda}
+\newcommand{\ga}{\alpha}
+\newcommand{\gt}{\tau}
+\newcommand{\gy}{\gamma}
+\newcommand{\gb}{\beta}
+\newcommand{\T}{\intercal}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\var}{\textrm{Var}}
+\renewcommand{\Pr}{\mathbb{P}}
+\renewcommand{\E}{\mathbb{E}}
+```
+```{python}
+import matplotlib.pyplot as plt
+import numpy as np
+from tqdm import tqdm,trange
+from numba import jit
+import copy
+import pdb
+import time
+```
+
+## Problem 1: ...
+
+We have the Heston Stochastic Volatility Model with:
+
+$$
+\begin{aligned}
+dS_t &= rS_t dt + S_t \sqrt{V_t} dW_t^1 \\
+dV_t &= \kappa(\theta - V_t) dt + \eta \sqrt{V_t} dW_t^2
+\end{aligned}
+$$
+
+Applying the multivariate Ito's Lemma, to a function $f(t,V,S)$ (and excluding the $\frac{\partial f}{\partial t}$ term because it is 0) we have:
+
+$$
+\begin{aligned}
+df(t,V,S) &= \frac{\partial f}{\partial t} dt+ \frac{\partial f}{\partial S} dS_t + \frac{\partial f}{\partial V}dV_t + \frac{1}{2} \frac{\partial^2f}{\partial S^2}dS_t^2 + \frac{1}{2} \frac{\partial^2f}{\partial V^2}dV_t^2 + \frac{\partial^2 f}{\partial S \partial V} dS_tdV_t
+\end{aligned}
+$$
+
+where we also have that, by the rules of Ito calculus:
+
+$$
+dS_t^2 = S_t^2 V_t dt \quad dV_t^2 = \eta^2 V_t dt \quad dS_t dV_t = \rho \eta S_t V_t dt
+$$ 
+and so we obtain the following differential:
+
+
+$$
+\begin{aligned}
+df(t,V,S) &= \frac{\partial f}{\partial t} dt +\frac{\partial f}{\partial S}\left(rS_t dt + S_t \sqrt{V_t} dW_t^1\right) + \frac{\partial F}{\partial V}\left( \kappa(\theta - V_t) dt + \eta \sqrt{V_t} dW_t^2\right) \\
+&\qquad  +  \left( \frac{\partial^2 f}{\partial S^2}\frac{S_t^2 V_t}{2}  +\frac{\partial^2 f}{\partial V^2}\frac{\eta^2 V_t}{2}  + \rho \eta S_t V_t \frac{\partial f}{\partial S \partial V} \right)dt\\ 
+&= \left(\frac{\partial f}{\partial t} + r S_t\frac{\partial f}{\partial S} + \kappa(\theta - V_t)\frac{\partial F}{\partial V} +    \frac{S_t^2 V_t}{2}\frac{\partial^2 f}{\partial S^2}  +\frac{\eta^2 V_t}{2}\frac{\partial^2 f}{\partial V^2}  + \rho \eta S_t V_t \frac{\partial f}{\partial S \partial V} \right) dt \\
+&\qquad + S_t \sqrt{V_t}\frac{\partial F}{\partial S}dW_t^1 + \eta \sqrt{V_t}\frac{\partial F}{\partial V}dW_t^2
+\end{aligned}
+$$
+
+Taking the risk-neutral Expectation of both sides, we find that the martingale terms are $0$, with the rest becoming:
+
+$$
+\mathbb{E}[df(t,V,S)] = rf(t,V,S) dt = \left( \frac{\partial f}{\partial t} + r S_t\frac{\partial f}{\partial S} + \kappa(\theta - V_t)\frac{\partial F}{\partial V} +    \frac{S_t^2 V_t}{2}\frac{\partial^2 f}{\partial S^2}  +\frac{\eta^2 V_t}{2}\frac{\partial^2 f}{\partial V^2}  + \rho \eta S_t V_t \frac{\partial f}{\partial S \partial V} \right)dt
+$$
+
+After doing a time change from $t$ to $T - t$ (which only flips the sign on $\partial_t f$ from the chain rule) we have a more familiar PDE:
+
+$$
+\frac{\partial f}{\partial t}= r S_t\frac{\partial f}{\partial S} + \kappa(\theta - V_t)\frac{\partial f}{\partial V} +    \frac{S_t^2 V_t}{2}\frac{\partial^2 f}{\partial S^2}  +\frac{\eta^2 V_t}{2}\frac{\partial^2 f}{\partial V^2}  + \rho \eta S_t V_t \frac{\partial f}{\partial S \partial V}  -rf 
+$$
+
+Now, we have two spatial coordinates and one time coordinate, so we will use the notation that:
+
+$f(t,V,S) = f(m \Gd t, j \Gd s, k \Gd v) = f^m_{j,k}$
+
+We use the following approximations for the partial derivatives:
+
+- First Order Derivatives:
+$$
+\frac{\partial f}{\partial t} = \frac{f^{m+1}_{j,k}-f^{m}_{j,k}}{\Gd t} \qquad 
+\frac{\partial f}{\partial V} = \frac{f^m_{j+1,k}-f^{m}_{j-1,k}}{2 \Gd v} \qquad 
+\frac{\partial f}{\partial S} = \frac{f^m_{j,k+1}-f^{m}_{j,k-1}}{2 \Gd s}
+$$
+
+- Second Order Standard Derivatives:
+
+$$
+\frac{\partial^2 f}{\partial V^2} = \frac{f^m_{j+1,k} -2f^m_{j,k}+f^{m}_{j-1,k}}{(\Gd v)^2} \qquad 
+\frac{\partial^2 f}{\partial S^2} = \frac{f^m_{j,k+1} -2f^m_{j,k}+f^{m}_{j,k-1}}{(\Gd s)^2}
+$$
+
+- Second Order Mixed Derivatives:
+$$
+\frac{\partial^2 f}{\partial S \partial V} = \frac{f^m_{j+1,k+1} + f^m_{j-1,k-1} -f^m_{j+1,k-1} - f^m_{j-1,k+1} }{4 \Gd s \Gd v}
+$$
+
+Letting $S_k = k \Gd s$ and $V_j = j \Gd v$, Our numeric simulation therefore solves:
+
+$$
+\begin{aligned}
+&\frac{f^{m+1}_{j,k}-f^{m}_{j,k}}{\Gd t} = r S_k \frac{f^m_{j,k+1}-f^{m}_{j,k-1}}{2 \Gd s} + \kappa(\theta - V_j)\frac{f^m_{j+1,k}-f^{m}_{j-1,k}}{ 2\Gd v}\\
+&+\frac{1}{2}V_j S_k^2 \left( \frac{f^m_{j,k+1} -2f^m_{j,k}+f^{m}_{j,k-1}}{(\Gd s)^2} \right) + \frac{1}{2} \eta^2 V_j \left( \frac{f^m_{j+1,k} -2f^m_{j,k}+f^{m}_{j-1,k}}{(\Gd v)^2}\right) \\ 
+&+ \rho \eta S_k V_j \left( \frac{f^m_{j+1,k+1} + f^m_{j-1,k-1} -f^m_{j+1,k-1} - f^m_{j-1,k+1} }{4 \Gd s \Gd v}\right) - r f^m_{j,k} 
+\end{aligned}
+$$ 
+
+Letting $S_k = k \Gd s$ and $V_j = j \Gd v$, we find: 
+$$
+\begin{aligned}
+&\frac{f^{m+1}_{j,k}-f^{m}_{j,k}}{\Gd t} = r k \frac{f^m_{j,k+1}-f^{m}_{j,k-1}}{2} + \kappa(\theta - j \Gd v)\frac{f^m_{j+1,k}-f^{m}_{j-1,k}}{ 2\Gd v}\\
+&+\frac{1}{2}j k^2 \Gd v \left( f^m_{j,k+1} -2f^m_{j,k}+f^{m}_{j,k-1} \right) + \frac{1}{2} \eta^2 j \left( \frac{f^m_{j+1,k} -2f^m_{j,k}+f^{m}_{j-1,k}}{\Gd v}\right) \\ 
+&+ \rho \eta j k \left( \frac{f^m_{j+1,k+1} + f^m_{j-1,k-1} -f^m_{j+1,k-1} - f^m_{j-1,k+1} }{4}\right) - r f^m_{j,k} 
+\end{aligned}
+$$
+
+
+Collecting terms, solving for $f_{j,k}^{m-1}$ we find: 
+$$
+\begin{aligned}
+  f_{j,k}^{m+1} &= f_{j,k}^m \left(1 - r \Gd t - j k^2 \Gd v \Gd t - \frac{ \eta^2 j \Gd t}{ \Gd v}  \right) + \frac{f_{j,k-1}^m \Gd t}{2} \left(jk^2 \Gd v - rk \right) \\ 
+&+ \frac{f_{j,k+1}^m \Gd t}{2} \left(rk + jk^2 \Gd v \right) + \frac{f_{j-1,k}^m \Gd t}{2 \Gd v} \left( \eta^2 j - \kappa(\theta -j \Gd v) \right)+ \frac{f_{j+1,k}^m \Gd t}{2 \Gd v} \left( \eta^2 j + \kappa(\theta -j \Gd v) \right)\\
+&+ \rho \eta j k \left( \frac{f^m_{j+1,k+1} + f^m_{j-1,k-1} -f^m_{j+1,k-1} - f^m_{j-1,k+1} }{4}\right)
+\end{aligned}
+$$
+
+<!-- 
+```{python 1-a-1, echo = TRUE, message = FALSE, warning = FALSE}
+def AM_put_explicit_fd_old(dt, dS, dV):
+    """
+    Prices an American put option using Explicit Finite Difference method.
+    The Heston model is used and computes the f(S, V) function.
+    """
+    
+    # Heston model parameters
+    r = 0.05
+    kappa = 1
+    theta = 0.2
+    eta = 0.5
+    rho = -0.4
+    
+    # Option parameters
+    T = 1
+    K = 100
+    S_max = 2*K
+    V_min = 0.05
+    V_max = 0.6
+    
+    timesteps = round(T/dt) # Time discretization
+    assetsteps = round(S_max/dS) + 1 # Space discretization
+    volsteps = round((V_max - V_min)/dV) + 1 # Volatility discretization
+    vetS = dS*np.arange(assetsteps)
+    
+
+    # Immediate payoff & Terminal condition
+    #imm = np.tile(np.maximum(K - vetS, 0), (volsteps, 1)).T
+    imm = np.maximum(K-vetS,0).repeat(volsteps).reshape((-1,volsteps))
+    f = copy.deepcopy(imm)
+    for i in range(timesteps):
+        newf = np.zeros((assetsteps, volsteps))
+        for j in range(1, assetsteps - 1):
+            for k in range(1, volsteps - 1):
+                A = np.zeros((3, 3))
+                A[2,2] = A[0,0] = rho*eta*j*(V_min/dV + k)*dt/4
+                A[0,2] = A[2,0] = -rho*eta*j*(V_min/dV + k)*dt/4
+                A[1,1] = 1 - r*dt - j**2*(V_min/dV + k)*dV*dt - eta**2*(V_min/dV + k)*dt/dV
+                A[0,1] = -(r*j*dt/2 - j**2*(V_min/dV + k)*dV*dt/2)
+                A[2,1] = r*j*dt/2 + j**2*(V_min/dV + k)*dV*dt/2
+                A[1,0] = -(dt*kappa*(theta - (V_min/dV + k)*dV)/ (2*dV) - eta**2*(V_min/dV + k)*dt/(2*dV))
+                A[1,2] = dt*kappa*(theta - (V_min/dV + k)*dV)/(2*dV) + eta**2*(V_min/dV + k)*dt/(2*dV)
+                
+                newf[j,k] = (
+                  A[0,0]*f[j-1,k-1] + A[0,1]*f[j-1,k] + A[0,2]*f[j-1,k+1] +
+                  A[1,0]*f[j,k-1] + A[1,1]*f[j,k] + A[1,2]*f[j,k+1] +
+                  A[2,0]*f[j+1,k-1] + A[2,1]*f[j+1,k] + A[2,2]*f[j+1,k+1]
+                  )
+        
+        # Lower Volatility Boundary
+        newf[1:assetsteps-1,0] = 2*newf[1:assetsteps-1,1] - newf[1:assetsteps-1,2]
+        # Upper Volatility Boundary
+        newf[1:assetsteps-1,volsteps-1] = 2*newf[1:assetsteps-1,volsteps-2] - newf[1:assetsteps-1,volsteps-3]
+        # Lower Stock Price Boundary
+        newf[0,:] = K*np.exp(-r*(i + 1)*dt)
+
+        # Compute American put price
+        # Take the max between the immediate payoff & continuation value
+        f = np.maximum(newf, imm)
+
+    return f
+```
+
+```{python 1-a-1, echo = TRUE, message = FALSE, warning = FALSE}
+@jit(nopython=True)
+def AM_put_explicit_fd(dt, dS, dV):
+    """
+    Prices an American put option using Explicit Finite Difference method.
+    The Heston model is used and computes the f(S, V) function.
+    """
+    
+    # Heston model parameters
+    r = 0.05
+    kappa = 1
+    theta = 0.2
+    eta = 0.5
+    rho = -0.4
+    
+    # Option parameters
+    T = 1
+    K = 100
+    S_max = 1000
+    V_min = 0.05
+    V_max = 0.6
+    
+    timesteps = round(T/dt) # Time discretization
+    assetsteps = round(S_max/dS) + 1 # Space discretization
+    volsteps = round((V_max - V_min)/dV) + 1 # Volatility discretization
+    vetS = dS*np.arange(assetsteps)
+    
+
+    # Immediate payoff & Terminal condition
+    #imm = np.tile(np.maximum(K - vetS, 0), (volsteps, 1)).T
+    imm = np.maximum(K-vetS,0).repeat(volsteps).reshape((-1,volsteps))
+    f = np.copy(imm)*1.0
+    for i in range(timesteps):
+        newf = np.zeros((assetsteps, volsteps))
+        for j in range(1, assetsteps - 1):
+            for k in range(1, volsteps - 1):
+                A = np.zeros((3, 3))
+                A[2,2] = A[0,0] = rho*eta*j*(V_min/dV + k)*dt/4
+                A[0,2] = A[2,0] = -rho*eta*j*(V_min/dV + k)*dt/4
+                A[1,1] = 1 - r*dt - j**2*(V_min/dV + k)*dV*dt - eta**2*(V_min/dV + k)*dt/dV
+                A[0,1] = -(r*j*dt/2 - j**2*(V_min/dV + k)*dV*dt/2)
+                A[2,1] = r*j*dt/2 + j**2*(V_min/dV + k)*dV*dt/2
+                A[1,0] = -(dt*kappa*(theta - (V_min/dV + k)*dV)/ (2*dV) - eta**2*(V_min/dV + k)*dt/(2*dV))
+                A[1,2] = dt*kappa*(theta - (V_min/dV + k)*dV)/(2*dV) + eta**2*(V_min/dV + k)*dt/(2*dV)
+                
+                newf[j,k] = (
+                  A[0,0]*f[j-1,k-1] + A[0,1]*f[j-1,k] + A[0,2]*f[j-1,k+1] +
+                  A[1,0]*f[j,k-1] + A[1,1]*f[j,k] + A[1,2]*f[j,k+1] +
+                  A[2,0]*f[j+1,k-1] + A[2,1]*f[j+1,k] + A[2,2]*f[j+1,k+1]
+                  )
+        
+        # Lower Volatility Boundary
+        newf[1:assetsteps-1,0] = 2*newf[1:assetsteps-1,1] - newf[1:assetsteps-1,2]
+        # Upper Volatility Boundary
+        newf[1:assetsteps-1,volsteps-1] = 2*newf[1:assetsteps-1,volsteps-2] - newf[1:assetsteps-1,volsteps-3]
+        # Lower Stock Price Boundary
+        newf[0,:] = K*np.exp(-r*(i + 1)*dt)
+
+        # Compute American put price
+        # Take the max between the immediate payoff & continuation value
+        f = np.maximum(newf, imm)
+
+    return f
+```
+```{python 1-a-2, echo = TRUE, message = FALSE, warning = FALSE}
+# Initial conditions
+S0 = 100
+V0 = 0.25
+dt = 10**(-5)
+dS = 5
+dV = 0.05
+V_min = 0.05
+
+# Obtaining put prices
+# start = time.perf_counter()
+# pval = AM_put_explicit_fd_old(dt, dS, dV)
+# end = time.perf_counter()
+# print("Elapsed (regular python) = {}s".format((end - start)))
+# specific_value = pval[round(S0/dS),round((V0 - V_min)/ dV)]
+# print(specific_value)
+
+start = time.perf_counter()
+pval = AM_put_explicit_fd(dt, dS, dV)
+end = time.perf_counter()
+print("Elapsed (compile) = {}s".format((end - start)))
+
+
+# Extracting a specific value from the resulting matrix
+specific_value = pval[round(S0/dS),round((V0 - V_min)/ dV)]
+
+print(specific_value)
+```
+```{python 1-a-3, echo = TRUE, message = FALSE, warning = FALSE}
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+
+# Obtaining American Put prices
+pval = AM_put_explicit_fd(dt, dS, dV)
+# Option value at S0, V0
+pval[round(S0/dS),round((V0 - V_min)/ dV)]
+
+# Creating meshgrid for the array indices
+K = 100
+S_max, V_max = 1000, 0.6
+assetsteps = round(S_max/dS) + 1         # Space discretization
+volsteps = round((V_max - V_min)/dV) + 1 # Volatility discretization
+vetS = dS*np.arange(assetsteps)
+vetV = V_min + dV*np.arange(volsteps)
+X, Y = np.meshgrid(vetV, vetS)
+
+# Creating figure and 3D axis with size (width=11, height=6)
+fig = plt.figure(figsize=(11, 6))
+ax = fig.add_subplot(111, projection='3d')
+
+# Plotting the surface
+surf = ax.plot_surface(X, Y, pval, cmap='viridis', rstride=1, cstride=1)
+
+# Adding title and labels
+ax.set_title('Surface Plot of American Put')
+ax.set_xlabel('Volatility')
+ax.set_ylabel('Stock Price')
+ax.set_zlabel('Option Price')
+
+# Remove panel color
+ax.xaxis.pane.fill = False
+ax.yaxis.pane.fill = False
+ax.zaxis.pane.fill = False
+ax.xaxis.pane.set_edgecolor('w')
+ax.yaxis.pane.set_edgecolor('w')
+ax.zaxis.pane.set_edgecolor('w')
+
+# Rotate the plot by 165 degrees
+ax.view_init(35, 165)
+
+# Adding color bar to the plot
+fig.colorbar(surf)
+
+# Display the plot
+plt.show()
+```
+
+ -->
+
+
+## Problem 2: Two-Factor Markovian Path Dependent Volatility Model
+```{python cosmin_2a}
+#@jit(nopython=True)
+def MC_put(M, S0 = 10.0):
+    """
+    Prices an European put option using Monte Carlo simulations.
+    The follows a model where the volatility is a function of the past returns.
+    """
+    # Option parameters
+    T, K = 1/4, 10
+    # Model parameters
+    beta0, beta1, beta2 = 0.08, -0.08, 0.5
+    lambda1, lambda2 = 62, 40 
+    r = 0.05
+    # Initial values
+    R1, R2 = np.repeat(-0.044, M), np.repeat(0.007, M)
+    dt = 1/(365*2)
+    timesteps = round(T/dt)  # Time discretization
+    # Initialize S and Z
+    S = np.zeros((M,timesteps+1))
+    # print(S.shape)
+    np.random.seed(1)
+    Z = np.random.randn(M, timesteps)
+    S[:,0] = S0
+    # Monte Carlo
+    for t in range(1,timesteps+1):
+      # Compute sigma
+      sigma = beta0 + beta1*R1 + beta2*(R2**(1/2))
+      sigma = np.maximum(sigma, 0)  # Ensure positivity of sigma
+      # Euler-Maruyama scheme
+      S[:,t] = S[:,t-1] + S[:,t-1]*sigma*np.sqrt(dt)*Z[:,t-1]
+      R1 = R1 + lambda1*(sigma*np.sqrt(dt)*Z[:,t-1] - R1)*dt
+      R2 = R2 + lambda2*((sigma**2)*np.sqrt(dt)*Z[:,t-1] - R2)*dt
+      S[:,t] = np.maximum(S[:,t], 0) # Ensure positivity of S
+      R2 = np.maximum(R2, 0)         # Ensure positivity of R2
+    # Discounted payoff
+    return np.maximum(np.exp(-r*T)*(K-S[:,-1]), 0)
+M = 1000
+# Put option price at S0 = 10
+np.mean(MC_put(M))
+
+```
+
+
+
+
+```{python 2a}
+sqrt = np.sqrt
+#@jit(nopython=True)
+def mc_samples(M,Z,s0,T,dt):
+    b0 = 0.08; b1 = -0.08; b2 = 0.5 ; K = 10
+    l1 = 62; l2 = 40
+    r1 = -0.044*np.ones(M); r2 = 0.007*np.ones(M)
+    nsteps = int(T/dt)
+    r_risk_free = 0.05
+    S = np.ones((M,nsteps))*s0
+    for j in range(1,nsteps):
+        dW = sqrt(dt)*Z[:,j-1]
+        s12 = np.maximum(b0 +r1*b1+sqrt(r2)*b2,0)
+        S[:,j] = np.maximum(S[:,j-1]+S[:,j-1]*s12*dW,0)
+        r1 = r1 + l1*(s12*dW - r1)*dt
+        r2 = r2 + l2*( s12**2 -r2)*dt
+        r2 = np.maximum(r2,0)
+
+    return( np.maximum( np.exp(-r_risk_free*T)*(K-S[:,-1]),0))
+M = 25000
+T = 1/4
+dt = 1/(2*365)
+Z = np.random.normal(size=(M,int(1/dt)))
+print(np.mean(mc_samples(M,Z,s0=10,T=T,dt=dt)))
+# print(np.mean(MC_put(M)))
+
+```
+
+
+
+```{python 2b}
+
+#@jit(nopython=True)
+def bump_eval_sim(s0,K,eps,T=1/4):
+    npaths = 1000
+    dt = T/(2*365)
+    n_steps = int(1/dt)
+    s0_check = [s0-eps,s0,s0+eps]
+    prices = np.zeros(len(s0_check))
+    dW = np.random.normal(0,1,size=(npaths,n_steps))
+    for j in range(len(s0_check)):
+        S0 = s0_check[j]
+        prices[j] = np.mean(mc_samples(npaths,dW,S0,T,dt))
+    return prices
+
+K = 10
+s0_vals =np.arange(9,11.1,0.1)
+T = 1/4
+dt = T/(2*365)
+prices = []
+prices_2 = []
+for m in trange(len(s0_vals)):
+    prices.append(bump_eval_sim(s0_vals[m],K,0.005))
+
+print(prices)
+
+```
+```{python}
+import pandas as pd
+
+
+
+bump_sim_price = pd.DataFrame(prices)
+bump_sim_price.index = s0_vals
+bump_sim_price.columns = ["S0-eps","S0","S0+eps"]
+bump_sim_price["delta"] = (bump_sim_price["S0+eps"]-bump_sim_price["S0-eps"])/0.01
+
+bump_sim_price
+plt.plot(s0_vals,bump_sim_price["delta"])
+plt.title("Delta vs. S0, bump and revalue")
+plt.xlabel("S0")
+plt.ylabel("Delta")
+
+```
+
+
+Let $m_x$ be the posterior value at point x.  The output for a gaussian process regression with $N$ training points and kernel function $\kappa(\cdot,\cdot)$ is given by:
+
+$$
+\begin{aligned}
+m_x = \E\{m|X,\textbf{y}\} &= \sum_{i=1}^N \alpha_i \kappa(x_i,x)
+\end{aligned}
+$$
+
+where $\alpha=(\textbf{K} + \gs^2_n \textbf{I})^{-1}\textbf{y}$, $K_{i,j} = \kappa(x_i,x_j)$, and $\gs^2_n$ is the uncertainty of each observation.  Differentiating this expression with respect to $S_0$ is straightforward:
+
+
+$$
+\begin{aligned}
+\partial_{S_0} \E\{ m_x |X,\textbf{y}\} &= \sum_{i=1}^n \ga_i \partial_{S_0}\kappa(x_i,x)
+\end{aligned}
+$$
+```{python}
+import sklearn.gaussian_process as gp
+from sklearn.gaussian_process.kernels import Matern
+npaths = 1000
+T = 1/4
+dt = T/(2*365)
+K = 100
+## S0 values between 9 and 11 varying by 0.1
+s0_vals = np.arange(9,11.1,0.1)
+s0_vals = s0_vals.reshape(-1,1)
+Y=[]
+## Generate 1000 paths for each S0 value
+M = 1000
+sd_Y = []
+for s in s0_vals:
+    Z = np.random.normal(size=(npaths,int(1/dt)))
+    sample_out = mc_samples(npaths,Z,s,T,dt)
+    # sample_out = MC_put(M,s)
+    Y= np.append(Y,np.mean(sample_out))
+    sd_Y=np.append(sd_Y,np.std(sample_out))
+# Y.reshape(-1,1)
+obs_var=np.diag(np.maximum(1e-4,sd_Y))
+kernel = gp.kernels.Matern(length_scale=1,nu=2.5,length_scale_bounds=[10e-5,1000])
+model = gp.GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10,alpha=1E-3, normalize_y=False)
+
+#Fit Model
+model.fit(s0_vals,Y)
+l = model.kernel_.get_params()['length_scale']
+print(f"length: {l}")
+# Predict on S0 and get standard deviations
+fit_out,sigma = model.predict(s0_vals.reshape(-1,1),return_std=True)
+plt.plot(s0_vals,fit_out)
+plt.title("Price vs. S0, GPR")
+plt.xlabel("S0")
+plt.ylabel("Price")
+plt.show()
+```
+```{python}
+out = 0
+l = model.kernel_.get_params()['length_scale']
+s_test = s0_vals[4].reshape(-1,1)
+for key,a in enumerate(model.alpha_):
+    kern = model.kernel_(s_test,s0_vals[key].reshape(-1,1),eval_gradient=False).ravel()
+    out = out + a*kern
+print(out)
+print(model.predict(s_test))
+```
+
+The derivative of the Kernel Function is from the cited paper:
+
+$$
+\begin{aligned}
+\frac{\partial \kappa_{M_{5,2}}}{\partial x_k}(x,x_k) &= \left(\frac{-\frac{5}{3 \ell^2}(x_k -x_k^{'})-\frac{5^{3/2}}{3 \ell^3}(x_k-x_k')|x_k-x_k'|}{1 + \frac{\sqrt{5}}{\ell}|x_k - x_k^{'}| + \frac{5}{3 \ell^2}(x_k - x_k^{'})^2} \right)
+\end{aligned}
+$$
+
+
+```{python}
+# Formula from Paper
+
+def matern_deriv_mult(x,x_train,l):
+    num = -5/(3*l**2)*(x-x_train)-(5**(1.5))/(3*l**3)*(x-x_train)*np.abs(x-x_train)
+    denom = 1 + sqrt(5)/l*np.abs(x-x_train)+5/(3*l**2)*(x-x_train)**2
+    return (num/denom).ravel()
+
+
+def matern_deriv_var(y,l):
+    l = model.kernel_.get_params()['length_scale']
+    covmat = model.kernel_(s0_vals,s0_vals) + obs_var
+    mult_term = np.linalg.inv(covmat)
+    d52 = matern_deriv_mult(x,y,l)
+    return -5/(3*l**2)- (d52 @ mult_term) @ d52
+```
+```{python}
+
+
+l = model.kernel_.get_params()['length_scale']
+
+# Initialize 0 vector
+grad_vals =0.0*fit_out
+
+var_vals = 0.0*fit_out
+
+# x_a is point at which deriv is taken- in this case, we sweep across s0 values
+for key,x in enumerate(s0_vals):
+    kern_val = model.kernel_(x,s0_vals.reshape(-1,1),eval_gradient=False).ravel() # Vector of kernel Values
+    kern_coef = matern_deriv_mult(x,s0_vals,l).ravel() #Vector ofderivative coefficents
+    d_52_k = kern_coef * kern_val #multiplied elementwise from above
+    grad_vals[key] = d_52_k @ model.alpha_ #inner product with regression coefficients
+
+plt.plot(s0_vals,grad_vals)
+plt.title("Delta vs. S0, GPR")
+plt.xlabel("S0")
+plt.ylabel("Delta")
+```
+
+
+## Part D
+
+```{python}
+import torch 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+torch.device('cuda')
+T, dt, M = 1/4, 1/(2*360), 1000
+sims = 1000
+epsilon = 0.005
+input = np.linspace(9,11,sims)*1.0
+output = np.zeros(sims)
+for i in range(sims):
+  np.random.seed(1)
+  Z = np.random.randn(M, round(T/dt))
+  output[i] = np.mean(mc_samples(M,Z,input[i],T,dt))*1.0#(MC_put(M, Z, input[i]))
+input = torch.tensor(input,dtype=torch.float32)
+output = torch.tensor(output,dtype=torch.float32)
+input = input.unsqueeze(1)
+output = output.unsqueeze(1)
+input.requires_grad = True
+output.requires_grad = True
+# Implement simple feedforward NN
+class NN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layer1 = nn.Linear(1, 30)
+        self.layer2 = nn.Linear(30, 1)
+        self.activation = nn.Tanh()
+    def forward(self, x):
+        x = self.activation(self.layer1(x))
+        x = self.layer2(x)
+        return x
+# Instantiate the neural network
+#net = NeuralNetwork('ReLU')
+net = NN()
+# Define loss function
+criterion = nn.MSELoss()
+# Choose optimizer
+optimizer = optim.SGD(net.parameters(), lr=0.01)
+# Train the neural network
+num_epochs = 1000 
+for epoch in range(num_epochs):
+    optimizer.zero_grad() # Zeros the gradients
+    # pdb.set_trace()
+    predictions = net.forward(input) # Forward pass
+    # Compute the loss
+    loss = criterion(predictions, output)
+    loss.backward()   # Backward pass
+    optimizer.step()  # Update the weights
+    # Print the loss every 10 epochs
+    if (epoch + 1) % 100 == 0:
+        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item()}')
+
+```
+
+```{python}
+# Create the line plot
+S0 = torch.arange(9,11.01,0.1)
+plt.plot(S0, net(S0.unsqueeze(1)).detach(), label = 'Price', linewidth=0.7, color='blue')
+# Adding labels and title
+plt.xlabel('Initial Stock Price')
+plt.ylabel('Price')
+plt.title('Put Price')
+plt.legend()
+# Display the plot
+plt.grid(True)
+plt.show()
+
+```
+
+```{python}
+x = S0.unsqueeze(1)
+x.requires_grad = True
+y = net(x)
+gradx_of_y = torch.autograd.grad(sum(y), x,create_graph = True)[0]
+plt.plot(S0, gradx_of_y.detach(), label = 'Delta', linewidth=0.7, color='blue')
+# Adding labels and title
+plt.xlabel('Initial Stock Price')
+plt.ylabel('Delta')
+plt.title('Delta')
+plt.legend()
+# Display the plot
+plt.grid(True)
+plt.show()
+
+```

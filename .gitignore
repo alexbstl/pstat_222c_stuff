@@ -1,0 +1,14 @@
+# ignore everything
+*
+# allow directories
+!*/
+# except following file extensions 
+!.md
+!.gitignore
+!*.tex
+!*.pdf
+!*.png
+!*.r
+!*.qmd
+!*.rmd
+!*.html
